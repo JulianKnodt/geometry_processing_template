@@ -1,0 +1,14 @@
+[project]
+name = "sdf-quadrics"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.10.*"
+dependencies = [
+    "blendertoolbox>=0.0.5",
+    "bpy>=4.0.0",
+    "libigl>=2.5.1",
+    "pillow>=11.1.0",
+    "tqdm>=4.67.1",
+    "trimesh>=4.6.4",
+]
