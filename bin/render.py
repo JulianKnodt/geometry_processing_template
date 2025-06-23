@@ -10,6 +10,18 @@ except Exception as e:
 
 """)
   exit()
+try:
+  import blendertoolbox as bt
+except Exception as e:
+  print(f"Could not import blendertoolbox, due to {e}")
+  print("""To fix, try:
+
+  \tpip install blendertoolbox \
+  OR
+  \tuv add blendertoolbox
+
+  """)
+  exit()
 
 from mathutils import Vector, Matrix
 import math
@@ -26,10 +38,9 @@ def arguments():
   a.add_argument("--width", default=1024, type=int, help="")
   a.add_argument("--height", default=1024, type=int, help="")
   a.add_argument("--final-render", action="store_true")
-  a.add_argument("--hide-new", action="store_true")
-  a.add_argument("--hide-original", action="store_true")
   a.add_argument("--flip-horizontal", action="store_true")
   a.add_argument("--samples", default=1024, type=int, help="Number of samples for rendering")
+  a.add_argument("--wireframe", default=None, help="Mesh to use as wireframe")
 
   a.add_argument("--cam-x", default=0, type=float, help="X of camera")
   a.add_argument("--cam-y", default=2, type=float, help="Y of camera")
@@ -46,6 +57,8 @@ def arguments():
   a.add_argument("--light-strength", default=4, type=float, help="Strength of light")
   a.add_argument("--flip-light", action="store_true", help="Flip light direction")
   a.add_argument("--light-z", type=float, help="Light z value", default=155)
+  a.add_argument("--light-y", type=float, help="Light y value", default=-30)
+  a.add_argument("--light-x", type=float, help="Light x value", default=6)
 
   # rigid body arguments
   a.add_argument("--rigid-body", action="store_true", help="Add rigid body simulation with balls")
@@ -57,6 +70,10 @@ def arguments():
   a.add_argument("--ball-z-offset", default=0, type=float, help="Offset for balls on z-axis")
   a.add_argument("--debug-blend", default=None, type=str, help="If set, save to a temporary blend file")
   a.add_argument("--mesh-collider", action="store_true", help="Use a mesh collider for the input mesh")
+  a.add_argument("--transparent", action="store_true", help="Set this mesh to be transparent")
+  a.add_argument("--roughness", default=0.3, type=float, help="Roughness of the mesh")
+  a.add_argument("--ambient-light", type=float, default=0, help="Amount of ambient lighting to use")
+  a.add_argument("--shade-flat", action="store_true", help="Use flat shading instead of smooth")
 
   return a.parse_args()
 
@@ -95,7 +112,6 @@ def invisibleGround(location = (0,0,0), groundSize = 100, shadowBrightness = 0.7
 
 def add_wireframe(m, wireframe_thickness=0.01, target="Metallic"):
   if wireframe_thickness <= 0.: return
-
   if len(m.data.materials) == 0:
     mat = bpy.data.materials.new("MeshMaterial")
     m.data.materials.append(mat)
@@ -108,9 +124,17 @@ def add_wireframe(m, wireframe_thickness=0.01, target="Metallic"):
     wire = tree.nodes.new(type="ShaderNodeWireframe")
     wire.inputs[0].default_value = wireframe_thickness
 
-    neg = tree.nodes.new("ShaderNodeInvert")
-    tree.links.new(wire.outputs["Fac"], neg.inputs[1])
-    tree.links.new(neg.outputs[0], pbsdf.inputs[target])
+    tree.nodes.new('ShaderNodeMixShader')
+    mix_shader = tree.nodes[-1]
+
+    tree.links.new(wire.outputs[0], mix_shader.inputs[0])
+    tree.links.new(pbsdf.outputs["BSDF"], mix_shader.inputs[1])
+    tree.links.new(mix_shader.outputs["Shader"], tree.nodes['Material Output']\
+      .inputs['Surface'])
+
+    #neg = tree.nodes.new("ShaderNodeInvert")
+    #tree.links.new(wire.outputs["Fac"], neg.inputs[1])
+    #tree.links.new(neg.outputs[0], pbsdf.inputs[target])
 
 def add_vertex_colors(m):
   if len(m.data.materials) == 0:
@@ -126,16 +150,21 @@ def add_vertex_colors(m):
 
     tree.links.new(color_attrib.outputs["Color"], pbsdf.inputs["Base Color"])
 
-def set_transparent(m):
+def set_mat(m, transparent:bool=False, roughness:float=0.3):
   for mat in m.data.materials:
     mat.blend_method = "BLEND"
 
     mat.use_nodes = True
     tree = mat.node_tree
     pbsdf = tree.nodes["Principled BSDF"]
-    pbsdf.inputs['Transmission Weight'].default_value = 0.6
-    pbsdf.inputs["Alpha"].default_value = 0.9
-    pbsdf.inputs["Roughness"].default_value = 0.3
+    if transparent:
+      pbsdf.inputs['Transmission Weight'].default_value = 0.6
+      pbsdf.inputs["Alpha"].default_value = 0.9
+    else:
+      pbsdf.inputs['Transmission Weight'].default_value = 0
+      pbsdf.inputs["Alpha"].default_value = 1
+    pbsdf.inputs["Roughness"].default_value = roughness
+    pbsdf.inputs["Metallic"].default_value = 0.
 
 def center(o, origin=None):
   me = o.data
@@ -197,18 +226,6 @@ def main():
     bpy.context.scene.rigidbody_world.point_cache.frame_start = 0
     bpy.context.scene.rigidbody_world.point_cache.frame_end = 1000
 
-  try:
-    import blendertoolbox as bt
-  except Exception as e:
-    print(f"Could not import blendertoolbox, due to {e}")
-    print("""To fix, try:
-
-    \tpip install blendertoolbox \
-    OR
-    \tuv add blendertoolbox
-
-    """)
-    return;
 
   exposure = 1.5
   use_gpu = True
@@ -227,7 +244,9 @@ def main():
   elif ".ply" in args.mesh:
     bpy.ops.wm.ply_import(filepath=args.mesh, up_axis="Y", forward_axis="Z")
     is_ply = True
-  else: assert(False)
+  elif ".fbx" in args.mesh:
+    bpy.ops.import_scene.fbx(filepath=args.mesh)
+  else: assert(False), args.mesh
 
   if args.rigid_body:
     # make the input mesh passive
@@ -244,15 +263,39 @@ def main():
   )
   bpy.context.view_layer.update()
 
-  for o in new_mesh_obs: o.hide_render=args.hide_new
+  if args.shade_flat:
+    bpy.ops.object.shade_flat()
+  else:
+    #bpy.ops.object.shade_smooth() # Option1: Gouraud shading
+    bpy.ops.object.shade_flat()
 
   if is_ply:
     for o in new_mesh_obs: add_vertex_colors(o)
 
-  #for o in mesh_obs: set_transparent(o) # TEMPORARY LINE
-  for o in new_mesh_obs: set_transparent(o)
+  #for o in mesh_obs: set_mat(o) # TEMPORARY LINE
+  for o in new_mesh_obs: set_mat(o, args.transparent, args.roughness)
 
   for o in new_mesh_obs: add_wireframe(o, args.wireframe_thickness)
+
+  if args.wireframe is not None and len(args.wireframe) > 0:
+    assert(os.path.exists(args.wireframe)), args.wireframe
+    is_ply = False
+    if ".obj" in args.wireframe:
+      bpy.ops.wm.obj_import(filepath=args.wireframe, use_split_groups=False)
+    elif ".ply" in args.wireframe:
+      bpy.ops.wm.ply_import(filepath=args.wireframe, up_axis="Y", forward_axis="Z")
+      is_ply = True
+    else: assert(False)
+
+    wireframe_obs = [o for o in bpy.context.scene.objects if o.type == "MESH" if o not in new_mesh_obs]
+    rescale(
+      wireframe_obs, ms, flip_h = args.flip_horizontal, swap_xy=args.swap_xy,
+      N=args.scale, rot_z=args.rot_z,
+    )
+    bpy.context.view_layer.update()
+
+    if is_ply:
+      for o in wireframe_obs: add_vertex_colors(o)
 
   ## set invisible plane (shadow catcher)
   invisibleGround(location=(0,0,args.floor_y), shadowBrightness=0.03)
@@ -263,10 +306,12 @@ def main():
   focalLength = 45
   cam = bt.setCamera(camLocation, lookAtLocation, focalLength)
 
-  lightAngle = (6, -30, args.light_z if args.flip_light else -args.light_z)
+  lightAngle = (args.light_x, args.light_y, args.light_z if args.flip_light else -args.light_z)
   strength = args.light_strength
   shadowSoftness = 0.3
   sun = bt.setLight_sun(lightAngle, strength, shadowSoftness)
+  if args.ambient_light != 0:
+    bt.setLight_ambient([args.ambient_light] * 4)
 
 
   if args.rigid_body:
@@ -285,12 +330,12 @@ def main():
     try:
       from tqdm import trange
     except Exception as e:
-      print(f"Could not import bpy, due to {e}")
+      print(f"Could not import tqdm, due to {e}")
       print("""To fix, try:
 
-        \tpip install bpy \
+        \tpip install tqem \
         OR
-        \tuv add bpy \
+        \tuv add tqdm \
 
       """)
       exit()
@@ -314,7 +359,6 @@ def main():
   ## set gray shadow to completely white with a threshold (optional but recommended)
   bt.shadowThreshold(alphaThreshold = 0.01, interpolationMode = 'CARDINAL')
 
-  bpy.ops.object.shade_smooth() # Option1: Gouraud shading
 
   if args.debug_blend is not None:
     bpy.ops.wm.save_mainfile(filepath=args.debug_blend)
