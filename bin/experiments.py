@@ -12,29 +12,46 @@ else:
 
 args = None
 
-out_dir = lambda is_ablation=False: "ablations" if is_ablation else "outputs"
+abl_dir = "ablations"
 
-def run_with_eval(src, dst, flags, is_abl=True, src_dir="data"):
+def run(
+  src, dst, flags, out_dir=abl_dir, src_dir="data", bin=bin_file, eval=True,
+  missing_only=False,
+):
   def cb():
+    nonlocal missing_only
     if "run" not in args.stages: return []
     if args.match_output is not None and args.match_output not in dst: return []
-    out_json = f"{out_dir(is_abl)}/{dst[:-4]}.json"
+    if args.force: missing_only = False
+    out_json = f"{out_dir}/{dst[:-4]}.json"
+    if missing_only and os.path.exists(out_json) and not args.force:
+      print(f"Skipping {src} -> {dst}, results at {out_json} already exist")
+      return []
+    out_file = f"{out_dir}/{dst}"
+    if missing_only and (not eval) and os.path.exists(out_file):
+      print(f"Skipping {src} -> {out_file}, destination exists")
+      return []
     cmds = [
-      f"{bin_file} -i {src_dir}/{src} -o {out_dir(is_abl)}/{dst} {flags} --stat-file {out_json}",
-      f"{sys.executable} bin/hausdorff.py -o data/{src} -n {out_dir(is_abl)}/{dst} --stat-file {out_json}"
+      f"{bin_file} -i {src_dir}/{src} -o {out_dir}/{dst} {flags} --stat-file {out_json}",
     ]
+    if eval:
+      cmds.append(
+        f"{sys.executable} bin/hausdorff.py -o {src_dir}/{src} -n {out_file} --stat-file {out_json}"
 
+      )
     return cmds
   return cb
 
 def render(
   i, cy,cz, ly,lz,out, w=1024, h=1024, cx=0, fy=0, lx=0, rz=45,
-  extras=""
+  extras="",
+  missing_only=False,
 ):
   out = os.path.join(os.getcwd(), out)
   def cb():
     if "render" not in args.stages: return []
     if args.match_output is not None and args.match_output not in out: return []
+    if (not args.force) and missing_only and os.path.exists(out): return []
 
     cmd = f"{sys.executable} bin/render.py \
       --mesh {i} \
@@ -75,6 +92,7 @@ def arguments():
   a.add_argument("--first-only", action="store_true", help="Run one command then exit")
   a.add_argument("--skip-to", default=None, choices=list(experiments.keys()), help="skip to this experiment")
   a.add_argument("--match-output", default=None, help="Only match render outputs with this")
+  a.add_argument("--force", action="store_true", help="Run all commands even if marked missing only")
   return a.parse_args()
 
 args = arguments()
