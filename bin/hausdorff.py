@@ -8,7 +8,7 @@ def arguments():
   a.add_argument("-o", "--original-mesh", required=True, help="Original mesh")
   a.add_argument("-n", "--new-mesh", required=True, help="New mesh")
   a.add_argument("--stat-file", default=None, help="File to write statistics to")
-  a.add_argument("--num-random-samples", default=100000, type=int, help="Number of random samples to use")
+  a.add_argument("--num-random-samples", default=1000000, type=int, help="Number of random samples to use")
   return a.parse_args()
 
 def main():
